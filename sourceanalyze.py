@@ -1,8 +1,10 @@
 import os
 import ast
 from sentence_transformers import SentenceTransformer
-import pinecone
+import faiss
 import openai
+import numpy as np
+import json
 
 # 1. ソースコード解析（Python専用）
 def parse_python_code(repo_path):
@@ -36,53 +38,88 @@ def parse_python_code(repo_path):
 def create_vector_database(repo_data):
     """
     ソースコードのデータを埋め込みベクトルに変換し、
-    Pineconeベクトルデータベースに保存します。
+    FAISSベクトルデータベースに保存します。
     """
     # 埋め込みモデルの初期化
     model = SentenceTransformer("all-MiniLM-L6-v2")
     
-    # Pineconeの初期化
-    pinecone.init(api_key="YOUR_API_KEY", environment="us-west1-gcp")
-    index = pinecone.Index("code-search")  # データベース名（事前に作成する必要があります）
-
-    # 各コードスニペットをベクトル化して保存
+    # 各コードスニペットをベクトル化
+    print("Embedding data...")
+    vectors = []
+    metadata = []
     for item in repo_data:
-        vector = model.encode(item["docstring"] or item["code"])  # ドキュメント文字列があれば優先
-        index.upsert([(item["name"], vector, {"type": item["type"], "code": item["code"]})])
+        text = item["docstring"] or item["code"]  # ドキュメント文字列があれば優先
+        vector = model.encode(text)  # ベクトル化
+        vectors.append(vector)
+        metadata.append(item)  # メタデータを保存
+
+    # FAISSインデックスの初期化
+    print("Creating FAISS index...")
+    dimension = len(vectors[0])  # ベクトルの次元数
+    index = faiss.IndexFlatL2(dimension)  # L2ノルムを使用したインデックス
+
+    # ベクトルをFAISSインデックスに追加
+    index.add(np.array(vectors))
+
+    # FAISSインデックスとメタデータを保存
+    faiss.write_index(index, "faiss_index.bin")  # インデックスの保存
+    with open("metadata.json", "w", encoding="utf-8") as f:
+        json.dump(metadata, f, ensure_ascii=False, indent=2)  # メタデータの保存
+
+    print("FAISS database created and saved locally.")
 
 # 3. クエリ検索
 def query_code_database(query):
     """
     ユーザーのクエリをベクトルに変換し、
-    Pineconeで関連コードスニペットを検索します。
+    FAISSで関連コードスニペットを検索します。
     """
-    # モデルのロード
+    # 埋め込みモデルのロード
     model = SentenceTransformer("all-MiniLM-L6-v2")
-    query_vector = model.encode(query)  # クエリをベクトル化
+    query_vector = model.encode(query).reshape(1, -1)  # クエリをベクトル化
 
-    # Pineconeで検索
-    index = pinecone.Index("code-search")
-    results = index.query(query_vector, top_k=5, include_metadata=True)  # 上位5件を取得
+    # FAISSインデックスとメタデータのロード
+    index = faiss.read_index("faiss_index.bin")
+    with open("metadata.json", "r", encoding="utf-8") as f:
+        metadata = json.load(f)
 
-    # 検索結果を返す
-    return results["matches"]
+    # FAISS検索
+    print("Searching FAISS database...")
+    distances, indices = index.search(query_vector, k=5)  # 上位5件を取得
+
+    # 検索結果を整形して返す
+    results = []
+    for distance, idx in zip(distances[0], indices[0]):
+        if idx < len(metadata):  # インデックスが範囲内か確認
+            result = metadata[idx]
+            result["distance"] = distance
+            results.append(result)
+
+    return results
 
 # 4. 自然言語生成
 def generate_response_from_matches(query, matches):
     """
     検索結果を基に、GPTを使って自然言語による回答を生成します。
     """
-    # Pineconeから取得した結果を文脈として整形
-    context = "\n\n".join([f"Name: {res['id']}\nCode: {res['metadata']['code']}" for res in matches])
-    
+    if not matches:
+        return "関連するコードは見つかりませんでした。"
+
+    # 検索結果を文脈として整形
+    context = "\n\n".join([f"Name: {res['name']}\nCode:\n{res['code']}" for res in matches])
+
     # OpenAI APIを使用して応答を生成
     openai.api_key = "YOUR_API_KEY"
-    response = openai.Completion.create(
-        model="text-davinci-003",
-        prompt=f"以下のコードスニペットに基づいて、質問に回答してください。\n\n{context}\n\n質問: {query}",
+    response = openai.ChatCompletion.create(
+        model="gpt-3.5-turbo",  # または "gpt-4"
+        messages=[
+            {"role": "system", "content": "あなたはコード解析の専門家です。"},
+            {"role": "user", "content": f"以下のコードスニペットに基づいて、質問に回答してください。\n\n{context}\n\n質問: {query}"}
+        ],
         max_tokens=300
     )
-    return response["choices"][0]["text"].strip()
+    return response["choices"][0]["message"]["content"].strip()
+
 
 # メイン処理
 if __name__ == "__main__":
@@ -96,7 +133,7 @@ if __name__ == "__main__":
     create_vector_database(repo_data)
 
     # ステップ 3: ユーザークエリを受け取って検索
-    user_query = input("質問を入力してください: ")  # 例: "このクラスの役割は？"
+    user_query = input("質問を入力してください: ")
     print("Searching for related code...")
     search_results = query_code_database(user_query)
 
