@@ -124,7 +124,7 @@ def generate_response_from_matches(query, matches):
 # メイン処理
 if __name__ == "__main__":
     # ステップ 1: ソースコードを解析
-    repo_path = "/home/user/homehub"  # 対象リポジトリのパス
+    repo_path = input("対象リポジトリの絶対パスを入力してください: ")
     print("Parsing repository...")
     repo_data = parse_python_code(repo_path)
 
