@@ -109,16 +109,16 @@ def generate_response_from_matches(query, matches):
     context = "\n\n".join([f"Name: {res['name']}\nCode:\n{res['code']}" for res in matches])
 
     # OpenAI APIを使用して応答を生成
-    openai.api_key = "YOUR_API_KEY"
-    response = openai.ChatCompletion.create(
+    openai.api_key = os.environ.get('OPENAI_API_KEY')
+    response = openai.chat.completions.create(
         model="gpt-3.5-turbo",  # または "gpt-4"
         messages=[
             {"role": "system", "content": "あなたはコード解析の専門家です。"},
             {"role": "user", "content": f"以下のコードスニペットに基づいて、質問に回答してください。\n\n{context}\n\n質問: {query}"}
         ],
-        max_tokens=300
+        max_tokens=600
     )
-    return response["choices"][0]["message"]["content"].strip()
+    return response.choices[0].message.content
 
 
 # メイン処理
