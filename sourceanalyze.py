@@ -142,3 +142,4 @@ if __name__ == "__main__":
     answer = generate_response_from_matches(user_query, search_results)
     print("\n--- AIの回答 ---")
     print(answer)
+    print("\n--- AIの回答 ---")

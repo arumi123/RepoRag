@@ -1,1 +1,3 @@
 venv/
+metadata.json
+faiss_index.bin
